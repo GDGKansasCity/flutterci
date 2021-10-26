@@ -1,0 +1,49 @@
+name: Build and Release iOS app
+
+on:
+  push:
+    branches: [ master ]
+    paths-ignore: [ 'android/**', 'test/**', '.github/workflows/android.yml' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v1
+        with:
+          channel: 'stable'
+      - uses: actions/setup-python@v2
+        with:
+          python-version: 3.7
+      - name: Install CodeMagic
+        run: python -m pip install codemagic-cli-tools
+
+      - name: Setup code signing
+        run: |
+          keychain initialize
+          echo "${{ secrets.IOS_SIGNING_CERTIFICATE_BASE64 }}" | base64 --decode > cert.p12
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}" | base64 --decode > "$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
+          keychain add-certificates --certificate cert.p12 --certificate-password ${{ secrets.IOS_SIGNING_CERTIFICATE_PASSWORD }}
+          xcode-project use-profiles
+      - name: Build IPA
+        run: |
+          flutter packages pub get
+          find . -name "Podfile" -execdir pod install \;
+          flutter build ipa --release \
+            --export-options-plist=$HOME/export_options.plist \
+            --build-number=`git rev-list --count HEAD`
+      - uses: actions/upload-artifact@v2
+        with: 
+          path: "build/ios/ipa/flutter_ci.ipa"
+          name: flutter_ci.ipa
+      - name: Upload IPA
+        run: |
+          export APP_STORE_CONNECT_ISSUER_ID=69a6de86-c8b1-47e3-e053-5b8c7c11a4d1
+          export APP_STORE_CONNECT_KEY_IDENTIFIER=A975JSGANX
+          export APP_STORE_CONNECT_PRIVATE_KEY="${{ secrets.APP_STORE_CONNECT_API_KEY }}"
+          app-store-connect publish --path $(find $(pwd) -name "*.ipa")
